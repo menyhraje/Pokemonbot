@@ -1,9 +1,8 @@
-RUNNING = True
-
 import requests
 from bs4 import BeautifulSoup
 import time
 import os
+import re
 
 TOKEN = os.environ.get("TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
@@ -12,6 +11,7 @@ SEARCH_TERM = ""
 SEARCH_URLS = []
 sent_links = set()
 last_update_id = None
+RUNNING = False
 
 
 # 📩 posílání zpráv
@@ -24,7 +24,7 @@ def send_telegram(message):
     requests.post(url, data=data)
 
 
-# 📥 čtení zpráv z Telegramu
+# 📥 čtení zpráv
 def get_updates():
     global last_update_id
     url = f"https://api.telegram.org/bot{TOKEN}/getUpdates"
@@ -56,16 +56,15 @@ def build_search_urls(term):
     ]
 
 
-# 💸 najde cenu (pokud je na stránce)
+# 💸 najde cenu
 def get_price(text):
-    import re
     match = re.search(r'(\d{2,5})\s?kč', text)
     if match:
         return match.group(1)
     return "neznámá"
 
 
-# 🔍 kontrola stránky
+# 🔍 kontrola webů
 def check_sites():
     global sent_links
 
@@ -75,7 +74,7 @@ def check_sites():
             text = r.text.lower()
 
             if any(word in text for word in ["skladem", "in stock", "dostupné", "available"]):
-                
+
                 if url not in sent_links:
                     price = get_price(text)
 
@@ -89,18 +88,23 @@ def check_sites():
             print("chyba:", e)
 
 
-# 🔁 MAIN LOOP
-send_telegram("🤖 Bot spuštěn! Napiš co chceš hledat.")
+# 🤖 START MESSAGE
+send_telegram("🤖 Bot spuštěn! Napiš co chceš hledat (nebo 'stop').")
 
+
+# 🔁 MAIN LOOP
 while True:
-        try:
+    try:
         msg = get_updates()
 
         if msg:
             if msg == "stop":
                 RUNNING = False
                 send_telegram("🛑 Hledání zastaveno")
-            
+
+            elif msg == "status":
+                send_telegram(f"📊 Stav: {'běží' if RUNNING else 'zastaveno'}")
+
             else:
                 RUNNING = True
                 SEARCH_TERM = msg
@@ -114,23 +118,6 @@ while True:
         else:
             print("⏸️ Pauza...")
 
-        time.sleep(60)
-
-    except Exception as e:
-        print("error:", e)
-        time.sleep(60)
-
-        if msg:
-            SEARCH_TERM = msg
-            SEARCH_URLS = build_search_urls(msg)
-            sent_links.clear()
-
-            send_telegram(f"🔍 Sleduju: {SEARCH_TERM}")
-
-        if SEARCH_URLS:
-            check_sites()
-
-        print("čekám 60s...")
         time.sleep(60)
 
     except Exception as e:
