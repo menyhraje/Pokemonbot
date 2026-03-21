@@ -58,9 +58,13 @@ def build_search_urls(term):
 
 # 💸 najde cenu
 def get_price(text):
-    match = re.search(r'(\d{2,5})\s?kč', text)
-    if match:
-        return match.group(1)
+    matches = re.findall(r'(\d{3,5})\s?kč', text)
+
+    if matches:
+        prices = [int(p) for p in matches if int(p) > 50]
+        if prices:
+            return min(prices)
+
     return "neznámá"
 
 
@@ -71,18 +75,26 @@ def check_sites():
     for url in SEARCH_URLS:
         try:
             r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
-            text = r.text.lower()
+            soup = BeautifulSoup(r.text, "html.parser")
+            text = soup.get_text().lower()
 
-            if any(word in text for word in ["skladem", "in stock", "dostupné", "available"]):
+            links = soup.find_all("a", href=True)
 
-                if url not in sent_links:
-                    price = get_price(text)
+            for link in links:
+                href = link["href"]
 
-                    send_telegram(f"🔥 RESTOCK!\n{url}\n💸 Cena: {price} Kč")
-                    sent_links.add(url)
+                if any(x in href.lower() for x in ["pokemon", "trainer", "box"]):
 
-            else:
-                print("není skladem:", url)
+                    full_link = href if href.startswith("http") else url + href
+
+                    if full_link not in sent_links:
+
+                        if any(word in text for word in ["skladem", "in stock", "dostupné"]):
+                            price = get_price(text)
+
+                            send_telegram(f"🔥 RESTOCK!\n{full_link}\n💸 Cena: {price} Kč")
+
+                            sent_links.add(full_link)
 
         except Exception as e:
             print("chyba:", e)
@@ -95,6 +107,8 @@ send_telegram("🤖 Bot spuštěn! Napiš co chceš hledat (nebo 'stop').")
 # 🔁 MAIN LOOP
 while True:
     try:
+        global RUNNING
+        
         msg = get_updates()
 
         if msg:
