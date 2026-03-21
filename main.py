@@ -3,43 +3,110 @@ from bs4 import BeautifulSoup
 import time
 import os
 
-TOKEN = os.environ.get("8723866654:AAELgx07OKf9d9s8Y82_TZOymTlYk0c4hAw")
-CHAT_ID = os.environ.get("6572868813")
+TOKEN = os.environ.get("TOKEN")
+CHAT_ID = os.environ.get("CHAT_ID")
 
-URLS = [
-    "https://www.dracik.cz/pokemon-tcg-sv10-5-black-bolt-white-flare/",
-    "https://www.cardempire.sk/pokemon-tcg-white-flare-elite-trainer-box/",
-    "https://www.vesely-drak.cz/produkty/pokemon-elite-trainer-box/15769-pokemon-white-flare-elite-trainer-box/",
-    "https://www.vesely-drak.cz/produkty/pokemon-elite-trainer-box/15770-pokemon-black-bolt-elite-trainer-box/",
-    "https://www.shadowball.cz/pokemon-tcg--scarlet-violet---white-flare-elite-trainer-box/",
-    "https://www.shadowball.cz/pokemon-tcg--scarlet-violet---black-bolt-elite-trainer-box/",
-    "https://www.cardstore.cz/pokemon-scarlet-and-violet-white-flare-booster-box-japonsky/",
-    "https://www.cardstore.cz/pokemon-scarlet-and-violet-black-bolt-booster-box-japonsky/",
-    "https://www.smarty.cz/Pokemon-TCG-SV10-5-Black-Bolt-Elite-Trainer-Box-4p231149",
-    "https://www.smarty.cz/Pokemon-TCG-SV10-5-White-Flare-Elite-Trainer-Box-4p231148",
-]
+SEARCH_TERM = ""
+SEARCH_URLS = []
+sent_links = set()
+last_update_id = None
 
+
+# 📩 posílání zpráv
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    data = {"chat_id": CHAT_ID, "text": message}
+    data = {
+        "chat_id": CHAT_ID,
+        "text": message
+    }
     requests.post(url, data=data)
 
-def check_site(url):
-    try:
-        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
-        soup = BeautifulSoup(r.text, "html.parser")
-        text = soup.get_text().lower()
 
-        if "skladem" in text:
-            send_telegram(f"🔥 RESTOCK!\n{url}")
-        else:
-            print("není:", url)
+# 📥 čtení zpráv z Telegramu
+def get_updates():
+    global last_update_id
+    url = f"https://api.telegram.org/bot{TOKEN}/getUpdates"
 
-    except Exception as e:
-        print("chyba:", e)
+    if last_update_id:
+        url += f"?offset={last_update_id + 1}"
+
+    response = requests.get(url).json()
+
+    if "result" in response:
+        for update in response["result"]:
+            last_update_id = update["update_id"]
+
+            if "message" in update and "text" in update["message"]:
+                return update["message"]["text"].lower()
+
+    return None
+
+
+# 🔍 vytvoření search URL
+def build_search_urls(term):
+    term = term.replace(" ", "+")
+    return [
+        f"https://www.dracik.cz/hledej?q={term}",
+        f"https://www.shadowball.cz/search?q={term}",
+        f"https://www.vesely-drak.cz/hledat?search={term}",
+        f"https://www.tlamagames.com/cz/hledani?phrase={term}",
+        f"https://www.originalky.cz/vyhledavani/?q={term}"
+    ]
+
+
+# 💸 najde cenu (pokud je na stránce)
+def get_price(text):
+    import re
+    match = re.search(r'(\d{2,5})\s?kč', text)
+    if match:
+        return match.group(1)
+    return "neznámá"
+
+
+# 🔍 kontrola stránky
+def check_sites():
+    global sent_links
+
+    for url in SEARCH_URLS:
+        try:
+            r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
+            text = r.text.lower()
+
+            if any(word in text for word in ["skladem", "in stock", "dostupné", "available"]):
+                
+                if url not in sent_links:
+                    price = get_price(text)
+
+                    send_telegram(f"🔥 RESTOCK!\n{url}\n💸 Cena: {price} Kč")
+                    sent_links.add(url)
+
+            else:
+                print("není skladem:", url)
+
+        except Exception as e:
+            print("chyba:", e)
+
+
+# 🔁 MAIN LOOP
+send_telegram("🤖 Bot spuštěn! Napiš co chceš hledat.")
 
 while True:
-    for url in URLS:
-        check_site(url)
+    try:
+        msg = get_updates()
 
-    time.sleep(60)
+        if msg:
+            SEARCH_TERM = msg
+            SEARCH_URLS = build_search_urls(msg)
+            sent_links.clear()
+
+            send_telegram(f"🔍 Sleduju: {SEARCH_TERM}")
+
+        if SEARCH_URLS:
+            check_sites()
+
+        print("čekám 60s...")
+        time.sleep(60)
+
+    except Exception as e:
+        print("error:", e)
+        time.sleep(60)
