@@ -1,3 +1,5 @@
+RUNNING = True
+
 import requests
 from bs4 import BeautifulSoup
 import time
@@ -91,8 +93,32 @@ def check_sites():
 send_telegram("🤖 Bot spuštěn! Napiš co chceš hledat.")
 
 while True:
-    try:
+        try:
         msg = get_updates()
+
+        if msg:
+            if msg == "stop":
+                RUNNING = False
+                send_telegram("🛑 Hledání zastaveno")
+            
+            else:
+                RUNNING = True
+                SEARCH_TERM = msg
+                SEARCH_URLS = build_search_urls(msg)
+                sent_links.clear()
+
+                send_telegram(f"🔍 Sleduju: {SEARCH_TERM}")
+
+        if RUNNING and SEARCH_URLS:
+            check_sites()
+        else:
+            print("⏸️ Pauza...")
+
+        time.sleep(60)
+
+    except Exception as e:
+        print("error:", e)
+        time.sleep(60)
 
         if msg:
             SEARCH_TERM = msg
