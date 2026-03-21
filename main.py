@@ -3,8 +3,8 @@ from bs4 import BeautifulSoup
 import time
 import os
 
-TOKEN = os.environ.get("TOKEN")
-CHAT_ID = os.environ.get("CHAT_ID")
+TOKEN = os.environ.get("8723866654:AAELgx07OKf9d9s8Y82_TZOymTlYk0c4hAw")
+CHAT_ID = os.environ.get("6572868813")
 
 URLS = [
     "https://www.dracik.cz/pokemon-tcg-sv10-5-black-bolt-white-flare/",
