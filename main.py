@@ -3,12 +3,14 @@ from bs4 import BeautifulSoup
 import time
 import os
 import re
+import urllib3
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 TOKEN = os.environ.get("TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 
-# 🔍 aktivní hledání
-search_tasks = {}  # {"white flare": [urls]}
+search_tasks = {}
 sent_links = set()
 last_update_id = None
 
@@ -20,7 +22,7 @@ def send_telegram(message):
     requests.post(url, data=data)
 
 
-# 📥 čtení zpráv
+# 📥 ZPRÁVY
 def get_updates():
     global last_update_id
     url = f"https://api.telegram.org/bot{TOKEN}/getUpdates"
@@ -29,7 +31,6 @@ def get_updates():
         url += f"?offset={last_update_id + 1}"
 
     response = requests.get(url).json()
-
     messages = []
 
     if "result" in response:
@@ -44,7 +45,7 @@ def get_updates():
     return messages
 
 
-# 🔗 generování URL
+# 🔗 URLS
 def build_search_urls(term):
     term = term.replace(" ", "+")
 
@@ -72,7 +73,7 @@ def build_search_urls(term):
     return [url.format(term) for url in base_urls]
 
 
-# 💸 cena
+# 💸 CENA
 def get_price(text):
     matches = re.findall(r'(\d{3,5})\s?kč', text)
 
@@ -84,14 +85,20 @@ def get_price(text):
     return "neznámá"
 
 
-# 🔍 kontrola
+# 🔍 CHECK
 def check_sites():
     global sent_links
 
     for term, urls in search_tasks.items():
         for url in urls:
             try:
-                r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
+                r = requests.get(
+                    url,
+                    headers={"User-Agent": "Mozilla/5.0"},
+                    timeout=10,
+                    verify=False
+                )
+
                 soup = BeautifulSoup(r.text, "html.parser")
                 text = soup.get_text().lower()
 
@@ -101,7 +108,6 @@ def check_sites():
                         price = get_price(text)
 
                         send_telegram(f"🔥 RESTOCK ({term})\n{url}\n💸 Cena: {price} Kč")
-
                         sent_links.add(url)
 
                 else:
@@ -115,19 +121,19 @@ def check_sites():
 send_telegram("🤖 Bot běží! Piš co chceš hledat.")
 
 
-# 🔁 MAIN LOOP
+# 🔁 LOOP
 while True:
     try:
-        msg = get_updates()
+        msgs = get_updates()
 
-        if msg:
+        for msg in msgs:
 
             # 🛑 STOP VŠE
             if msg == "stop":
                 search_tasks.clear()
-                send_telegram("🛑 Všechno hledání zastaveno")
+                send_telegram("🛑 Všechno zastaveno")
 
-            # 🛑 STOP KONKRÉTNÍ
+            # 🛑 STOP JEDNOHO
             elif " stop" in msg:
                 term = msg.replace(" stop", "").strip()
 
@@ -137,7 +143,7 @@ while True:
                 else:
                     send_telegram("❌ Nic takového nehledám")
 
-            # ➕ NOVÉ HLEDÁNÍ
+            # ➕ NOVÉ
             else:
                 term = msg.strip()
 
@@ -147,7 +153,7 @@ while True:
                 else:
                     send_telegram("⚠️ Už hledám")
 
-        # 🔍 běh
+        # 🔍 hledání
         if search_tasks:
             check_sites()
         else:
