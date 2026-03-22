@@ -1,153 +1,140 @@
 import requests
 from bs4 import BeautifulSoup
 import time
-import threading
-from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
+import os
+import re
 
-TOKEN = "TVŮJ_TOKEN"
+TOKEN = os.environ.get("TOKEN")
+CHAT_ID = os.environ.get("CHAT_ID")
 
-watchlist = {}
-last_seen = {}
-
-SEARCH_URLS = [
-    "https://www.vesely-drak.cz/hledani?string={}",
-    "https://www.vesely-drak.sk/hledani?string={}",
-    "https://www.cardstore.cz/search?controller=search&s={}",
-    "https://www.gengar.cz/?s={}&post_type=product",
-    "https://www.shadowball.cz/?s={}&post_type=product",
-    "https://www.pokemall.cz/search?q={}",
-    "https://www.pokemon-karty.cz/?s={}&post_type=product",
-    "https://www.cardpro.cz/?s={}&post_type=product",
-    "https://www.babuobchod.cz/?s={}&post_type=product",
-    "https://www.pokemon4u.cz/?s={}&post_type=product",
-    "https://www.kuma.cz/?s={}&post_type=product",
-    "https://www.alola.cz/?s={}&post_type=product",
-    "https://www.pokesov.cz/?s={}&post_type=product",
-    "https://www.cardyx.cz/?s={}&post_type=product",
-    "https://www.pokecenter.cz/?s={}&post_type=product",
-    "https://www.brloh.cz/?s={}&post_type=product",
-    "https://www.cardempire.cz/?s={}&post_type=product",
-    "https://www.ccplanet.cz/?s={}&post_type=product",
-]
-
-def check_product(product_name):
-    results = []
-
-    headers = {
-        "User-Agent": "Mozilla/5.0"
-    }
-
-    for url in SEARCH_URLS:
-        try:
-            search_url = url.format(product_name.replace(" ", "+"))
-            response = requests.get(search_url, headers=headers, timeout=10)
-            soup = BeautifulSoup(response.text, "html.parser")
-
-            items = soup.select("div.product, div.product-item, li.product")
-
-            for item in items:
-                text = item.get_text(" ", strip=True).lower()
-
-                if product_name.lower() not in text:
-                    continue
-
-                if not is_in_stock(text):
-                    continue
-
-                a = item.find("a")
-                link = a["href"] if a else search_url
-
-                price_tag = item.select_one(".price, .amount")
-                price = price_tag.text.strip() if price_tag else "N/A"
-
-                results.append({
-                    "name": product_name,
-                    "price": price,
-                    "link": link
-                })
-
-        except Exception as e:
-            print("Error:", e)
-
-    return results
+# 🔍 aktivní hledání
+search_tasks = {}  # {"white flare": [urls]}
+sent_links = set()
+last_update_id = None
 
 
-def watcher(chat_id, context):
-    while True:
-        for product in list(watchlist.get(chat_id, [])):
-            results = check_product(product)
-
-            if product not in last_seen:
-                last_seen[product] = {}
-
-            for r in results:
-                link = r["link"]
-                price = r["price"]
-
-                # nikdy neviděno → pošli
-                if link not in last_seen[product]:
-                    last_seen[product][link] = price
-
-                    message = f"""
-🔥 NALEZENO 🔥
-Produkt: {r['name']}
-Cena: {price}
-Odkaz: {link}
-"""
-                    context.bot.send_message(chat_id=chat_id, text=message)
-
-                # změna ceny → pošli update
-                elif last_seen[product][link] != price:
-                    old_price = last_seen[product][link]
-                    last_seen[product][link] = price
-
-                    message = f"""
-🔄 ZMĚNA CENY 🔄
-Produkt: {r['name']}
-Stará cena: {old_price}
-Nová cena: {price}
-Odkaz: {link}
-"""
-                    context.bot.send_message(chat_id=chat_id, text=message)
-
-        time.sleep(30)
+# 📩 Telegram
+def send_telegram(message):
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    data = {"chat_id": CHAT_ID, "text": message}
+    requests.post(url, data=data)
 
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.lower()
-    chat_id = update.message.chat_id
+# 📥 čtení zpráv
+def get_updates():
+    global last_update_id
+    url = f"https://api.telegram.org/bot{TOKEN}/getUpdates"
 
-    if chat_id not in watchlist:
-        watchlist[chat_id] = []
+    if last_update_id:
+        url += f"?offset={last_update_id + 1}"
 
-        thread = threading.Thread(target=watcher, args=(chat_id, context))
-        thread.daemon = True
-        thread.start()
+    response = requests.get(url).json()
 
-    if text == "stop":
-        watchlist[chat_id] = []
-        await update.message.reply_text("🛑 Všechno zastaveno")
-        return
+    if "result" in response:
+        for update in response["result"]:
+            last_update_id = update["update_id"]
 
-    if "stop" in text:
-        product = text.replace("stop", "").strip()
+            if "message" in update and "text" in update["message"]:
+                return update["message"]["text"].lower()
 
-        if product in watchlist[chat_id]:
-            watchlist[chat_id].remove(product)
-            await update.message.reply_text(f"🛑 Zastaveno: {product}")
-        return
-
-    if text not in watchlist[chat_id]:
-        watchlist[chat_id].append(text)
-        await update.message.reply_text(f"👀 Sleduju: {text}")
-    else:
-        await update.message.reply_text("⚠️ Už sleduju")
+    return None
 
 
-if __name__ == "__main__":
-    app = ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+# 🔗 generování URL
+def build_search_urls(term):
+    term = term.replace(" ", "+")
+    return [
+        f"https://www.dracik.cz/hledej?q={term}",
+        f"https://www.shadowball.cz/search?q={term}",
+        f"https://www.vesely-drak.cz/hledat?search={term}",
+        f"https://www.tlamagames.com/cz/hledani?phrase={term}",
+        f"https://www.originalky.cz/vyhledavani/?q={term}"
+    ]
 
-    print("Bot běží...")
-    app.run_polling()
+
+# 💸 cena
+def get_price(text):
+    matches = re.findall(r'(\d{3,5})\s?kč', text)
+
+    if matches:
+        prices = [int(p) for p in matches if int(p) > 50]
+        if prices:
+            return min(prices)
+
+    return "neznámá"
+
+
+# 🔍 kontrola
+def check_sites():
+    global sent_links
+
+    for term, urls in search_tasks.items():
+        for url in urls:
+            try:
+                r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
+                soup = BeautifulSoup(r.text, "html.parser")
+                text = soup.get_text().lower()
+
+                if any(word in text for word in ["skladem", "in stock", "dostupné"]):
+
+                    if url not in sent_links:
+                        price = get_price(text)
+
+                        send_telegram(f"🔥 RESTOCK ({term})\n{url}\n💸 Cena: {price} Kč")
+
+                        sent_links.add(url)
+
+                else:
+                    print(f"není skladem ({term}):", url)
+
+            except Exception as e:
+                print("chyba:", e)
+
+
+# 🤖 START
+send_telegram("🤖 Bot běží! Piš co chceš hledat.")
+
+
+# 🔁 MAIN LOOP
+while True:
+    try:
+        msg = get_updates()
+
+        if msg:
+
+            # 🛑 STOP VŠE
+            if msg == "stop":
+                search_tasks.clear()
+                send_telegram("🛑 Všechno hledání zastaveno")
+
+            # 🛑 STOP KONKRÉTNÍ
+            elif " stop" in msg:
+                term = msg.replace(" stop", "").strip()
+
+                if term in search_tasks:
+                    del search_tasks[term]
+                    send_telegram(f"🛑 Zastaveno: {term}")
+                else:
+                    send_telegram("❌ Nic takového nehledám")
+
+            # ➕ NOVÉ HLEDÁNÍ
+            else:
+                term = msg.strip()
+
+                if term not in search_tasks:
+                    search_tasks[term] = build_search_urls(term)
+                    send_telegram(f"🔍 Přidáno: {term}")
+                else:
+                    send_telegram("⚠️ Už hledám")
+
+        # 🔍 běh
+        if search_tasks:
+            check_sites()
+        else:
+            print("⏸️ nic nehledám...")
+
+        time.sleep(60)
+
+    except Exception as e:
+        print("error:", e)
+        time.sleep(60)
