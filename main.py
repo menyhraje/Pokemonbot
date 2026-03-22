@@ -30,14 +30,18 @@ def get_updates():
 
     response = requests.get(url).json()
 
+    messages = []
+
     if "result" in response:
         for update in response["result"]:
             last_update_id = update["update_id"]
 
             if "message" in update and "text" in update["message"]:
-                return update["message"]["text"].lower()
+                text = update["message"]["text"].lower()
+                print("📩 ZPRÁVA:", text)
+                messages.append(text)
 
-    return None
+    return messages
 
 
 # 🔗 generování URL
