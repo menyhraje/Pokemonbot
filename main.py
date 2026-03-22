@@ -43,13 +43,29 @@ def get_updates():
 # 🔗 generování URL
 def build_search_urls(term):
     term = term.replace(" ", "+")
-    return [
-        f"https://www.dracik.cz/hledej?q={term}",
-        f"https://www.shadowball.cz/search?q={term}",
-        f"https://www.vesely-drak.cz/hledat?search={term}",
-        f"https://www.tlamagames.com/cz/hledani?phrase={term}",
-        f"https://www.originalky.cz/vyhledavani/?q={term}"
+
+    base_urls = [
+        "https://www.vesely-drak.cz/hledani?string={}",
+        "https://www.vesely-drak.sk/hledani?string={}",
+        "https://www.cardstore.cz/search?controller=search&s={}",
+        "https://www.gengar.cz/?s={}&post_type=product",
+        "https://www.shadowball.cz/?s={}&post_type=product",
+        "https://www.pokemall.cz/search?q={}",
+        "https://www.pokemon-karty.cz/?s={}&post_type=product",
+        "https://www.cardpro.cz/?s={}&post_type=product",
+        "https://www.babuobchod.cz/?s={}&post_type=product",
+        "https://www.pokemon4u.cz/?s={}&post_type=product",
+        "https://www.kuma.cz/?s={}&post_type=product",
+        "https://www.alola.cz/?s={}&post_type=product",
+        "https://www.pokesov.cz/?s={}&post_type=product",
+        "https://www.cardyx.cz/?s={}&post_type=product",
+        "https://www.pokecenter.cz/?s={}&post_type=product",
+        "https://www.brloh.cz/?s={}&post_type=product",
+        "https://www.cardempire.cz/?s={}&post_type=product",
+        "https://www.ccplanet.cz/?s={}&post_type=product"
     ]
+
+    return [url.format(term) for url in base_urls]
 
 
 # 💸 cena
