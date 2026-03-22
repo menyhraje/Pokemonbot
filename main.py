@@ -1,139 +1,153 @@
 import requests
 from bs4 import BeautifulSoup
 import time
-import os
-import re
+import threading
+from telegram import Update
+from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
 
-TOKEN = os.environ.get("TOKEN")
-CHAT_ID = os.environ.get("CHAT_ID")
+TOKEN = "TVŮJ_TOKEN"
 
-SEARCH_TERM = ""
-SEARCH_URLS = []
-sent_links = set()
-last_update_id = None
-RUNNING = False
+watchlist = {}
+last_seen = {}
 
+SEARCH_URLS = [
+    "https://www.vesely-drak.cz/hledani?string={}",
+    "https://www.vesely-drak.sk/hledani?string={}",
+    "https://www.cardstore.cz/search?controller=search&s={}",
+    "https://www.gengar.cz/?s={}&post_type=product",
+    "https://www.shadowball.cz/?s={}&post_type=product",
+    "https://www.pokemall.cz/search?q={}",
+    "https://www.pokemon-karty.cz/?s={}&post_type=product",
+    "https://www.cardpro.cz/?s={}&post_type=product",
+    "https://www.babuobchod.cz/?s={}&post_type=product",
+    "https://www.pokemon4u.cz/?s={}&post_type=product",
+    "https://www.kuma.cz/?s={}&post_type=product",
+    "https://www.alola.cz/?s={}&post_type=product",
+    "https://www.pokesov.cz/?s={}&post_type=product",
+    "https://www.cardyx.cz/?s={}&post_type=product",
+    "https://www.pokecenter.cz/?s={}&post_type=product",
+    "https://www.brloh.cz/?s={}&post_type=product",
+    "https://www.cardempire.cz/?s={}&post_type=product",
+    "https://www.ccplanet.cz/?s={}&post_type=product",
+]
 
-# 📩 posílání zpráv
-def send_telegram(message):
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    data = {
-        "chat_id": CHAT_ID,
-        "text": message
+def check_product(product_name):
+    results = []
+
+    headers = {
+        "User-Agent": "Mozilla/5.0"
     }
-    requests.post(url, data=data)
-
-
-# 📥 čtení zpráv
-def get_updates():
-    global last_update_id
-    url = f"https://api.telegram.org/bot{TOKEN}/getUpdates"
-
-    if last_update_id:
-        url += f"?offset={last_update_id + 1}"
-
-    response = requests.get(url).json()
-
-    if "result" in response:
-        for update in response["result"]:
-            last_update_id = update["update_id"]
-
-            if "message" in update and "text" in update["message"]:
-                return update["message"]["text"].lower()
-
-    return None
-
-
-# 🔍 vytvoření search URL
-def build_search_urls(term):
-    term = term.replace(" ", "+")
-    return [
-        f"https://www.dracik.cz/hledej?q={term}",
-        f"https://www.shadowball.cz/search?q={term}",
-        f"https://www.vesely-drak.cz/hledat?search={term}",
-        f"https://www.tlamagames.com/cz/hledani?phrase={term}",
-        f"https://www.originalky.cz/vyhledavani/?q={term}"
-    ]
-
-
-# 💸 najde cenu
-def get_price(text):
-    matches = re.findall(r'(\d{3,5})\s?kč', text)
-
-    if matches:
-        prices = [int(p) for p in matches if int(p) > 50]
-        if prices:
-            return min(prices)
-
-    return "neznámá"
-
-
-# 🔍 kontrola webů
-def check_sites():
-    global sent_links
 
     for url in SEARCH_URLS:
         try:
-            r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
-            soup = BeautifulSoup(r.text, "html.parser")
-            text = soup.get_text().lower()
+            search_url = url.format(product_name.replace(" ", "+"))
+            response = requests.get(search_url, headers=headers, timeout=10)
+            soup = BeautifulSoup(response.text, "html.parser")
 
-            links = soup.find_all("a", href=True)
+            items = soup.select("div.product, div.product-item, li.product")
 
-            for link in links:
-                href = link["href"]
+            for item in items:
+                text = item.get_text(" ", strip=True).lower()
 
-                if any(x in href.lower() for x in ["pokemon", "trainer", "box"]):
+                if product_name.lower() not in text:
+                    continue
 
-                    full_link = href if href.startswith("http") else url + href
+                if not is_in_stock(text):
+                    continue
 
-                    if full_link not in sent_links:
+                a = item.find("a")
+                link = a["href"] if a else search_url
 
-                        if any(word in text for word in ["skladem", "in stock", "dostupné"]):
-                            price = get_price(text)
+                price_tag = item.select_one(".price, .amount")
+                price = price_tag.text.strip() if price_tag else "N/A"
 
-                            send_telegram(f"🔥 RESTOCK!\n{full_link}\n💸 Cena: {price} Kč")
-
-                            sent_links.add(full_link)
+                results.append({
+                    "name": product_name,
+                    "price": price,
+                    "link": link
+                })
 
         except Exception as e:
-            print("chyba:", e)
+            print("Error:", e)
+
+    return results
 
 
-# 🤖 START MESSAGE
-send_telegram("🤖 Bot spuštěn! Napiš co chceš hledat (nebo 'stop').")
+def watcher(chat_id, context):
+    while True:
+        for product in list(watchlist.get(chat_id, [])):
+            results = check_product(product)
+
+            if product not in last_seen:
+                last_seen[product] = {}
+
+            for r in results:
+                link = r["link"]
+                price = r["price"]
+
+                # nikdy neviděno → pošli
+                if link not in last_seen[product]:
+                    last_seen[product][link] = price
+
+                    message = f"""
+🔥 NALEZENO 🔥
+Produkt: {r['name']}
+Cena: {price}
+Odkaz: {link}
+"""
+                    context.bot.send_message(chat_id=chat_id, text=message)
+
+                # změna ceny → pošli update
+                elif last_seen[product][link] != price:
+                    old_price = last_seen[product][link]
+                    last_seen[product][link] = price
+
+                    message = f"""
+🔄 ZMĚNA CENY 🔄
+Produkt: {r['name']}
+Stará cena: {old_price}
+Nová cena: {price}
+Odkaz: {link}
+"""
+                    context.bot.send_message(chat_id=chat_id, text=message)
+
+        time.sleep(30)
 
 
-# 🔁 MAIN LOOP
-while True:
-    try:
-        global RUNNING
-        
-        msg = get_updates()
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.lower()
+    chat_id = update.message.chat_id
 
-        if msg:
-            if msg == "stop":
-                RUNNING = False
-                send_telegram("🛑 Hledání zastaveno")
+    if chat_id not in watchlist:
+        watchlist[chat_id] = []
 
-            elif msg == "status":
-                send_telegram(f"📊 Stav: {'běží' if RUNNING else 'zastaveno'}")
+        thread = threading.Thread(target=watcher, args=(chat_id, context))
+        thread.daemon = True
+        thread.start()
 
-            else:
-                RUNNING = True
-                SEARCH_TERM = msg
-                SEARCH_URLS = build_search_urls(msg)
-                sent_links.clear()
+    if text == "stop":
+        watchlist[chat_id] = []
+        await update.message.reply_text("🛑 Všechno zastaveno")
+        return
 
-                send_telegram(f"🔍 Sleduju: {SEARCH_TERM}")
+    if "stop" in text:
+        product = text.replace("stop", "").strip()
 
-        if RUNNING and SEARCH_URLS:
-            check_sites()
-        else:
-            print("⏸️ Pauza...")
+        if product in watchlist[chat_id]:
+            watchlist[chat_id].remove(product)
+            await update.message.reply_text(f"🛑 Zastaveno: {product}")
+        return
 
-        time.sleep(60)
+    if text not in watchlist[chat_id]:
+        watchlist[chat_id].append(text)
+        await update.message.reply_text(f"👀 Sleduju: {text}")
+    else:
+        await update.message.reply_text("⚠️ Už sleduju")
 
-    except Exception as e:
-        print("error:", e)
-        time.sleep(60)
+
+if __name__ == "__main__":
+    app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    print("Bot běží...")
+    app.run_polling()
